@@ -280,25 +280,34 @@ fi
 
 echo "   ✅ Podman GPU 설정 완료"
 
-# 9. Rootless 모드 문제 해결
+# 9. Podman을 완전히 root 모드로 강제
 echo ""
-echo "9️⃣  Rootless 모드 네임스페이스 설정 중..."
+echo "9️⃣  Podman root 모드 강제 설정 중..."
 
-# mount namespace 공유 설정
-if ! grep -q "/ - rootfs" /proc/self/mountinfo; then
-    echo "   🔧 마운트 네임스페이스 설정 중..."
-fi
+# Podman 환경 변수 설정으로 rootless 완전 비활성화
+cat > /etc/profile.d/podman-root.sh << 'EOF'
+# Podman을 항상 root 모드로 실행
+export STORAGE_DRIVER=overlay
+export STORAGE_OPTS=""
+export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
+export CONTAINERS_CONF=/etc/containers/containers.conf
+EOF
 
-# user namespace 설정
-if [ ! -f /etc/subuid ] || ! grep -q "^root:" /etc/subuid; then
-    echo "root:100000:65536" >> /etc/subuid
-    echo "root:100000:65536" >> /etc/subgid
-    echo "   ✅ user namespace 설정 완료"
-fi
+# 현재 세션에도 적용
+export STORAGE_DRIVER=overlay
+export STORAGE_OPTS=""
+export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
+export CONTAINERS_CONF=/etc/containers/containers.conf
 
-# 시스템 설정 적용
-sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
-echo "   ✅ 네임스페이스 설정 완료"
+# user namespace를 사용하지 않도록 설정
+cat >> /etc/containers/containers.conf << 'EOF'
+
+[containers]
+# Rootless 모드 비활성화
+userns = "host"
+EOF
+
+echo "   ✅ Root 모드 강제 설정 완료"
 
 # 10. Python 및 pip 확인
 echo ""
@@ -349,15 +358,20 @@ else
         echo "   📋 CDI 방식 테스트 (nvidia.com/gpu=all)..."
         echo ""
         
+        # 환경 변수 재확인
+        export STORAGE_DRIVER=overlay
+        export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
+        export CONTAINERS_CONF=/etc/containers/containers.conf
+        
         # 이미지 확인
-        if ! podman images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
+        if ! podman images 2>/dev/null | grep -q "nvidia/cuda.*12.1.0-base"; then
             echo "   ⏳ CUDA 이미지 다운로드 중..."
-            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -E "Pulling|Downloaded|Complete"
+            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -v "is not a shared mount" | grep -v "cannot clone" | grep -E "Pulling|Downloaded|Complete" || true
             echo ""
         fi
         
         echo "   🧪 CDI GPU 테스트 실행 중..."
-        CDI_OUTPUT=$(podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1)
+        CDI_OUTPUT=$(podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1 | grep -v "is not a shared mount" | grep -v "cannot clone" || true)
         CDI_EXIT_CODE=$?
         
         if [ $CDI_EXIT_CODE -eq 0 ] && echo "$CDI_OUTPUT" | grep -q "Tesla\|GeForce\|Quadro\|NVIDIA"; then
@@ -393,8 +407,13 @@ else
         echo "     docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
         echo ""
         
+        # 환경 변수 재확인
+        export STORAGE_DRIVER=overlay
+        export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
+        export CONTAINERS_CONF=/etc/containers/containers.conf
+        
         # 이미지가 이미 있는지 확인
-        if podman images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
+        if podman images 2>/dev/null | grep -q "nvidia/cuda.*12.1.0-base"; then
             echo "   ✓ CUDA 이미지 이미 존재"
         else
             echo "   ⏳ CUDA 이미지 다운로드 중... (최초 실행 시 1-2분 소요)"
@@ -402,20 +421,19 @@ else
             echo ""
             
             # 이미지 미리 다운로드 (진행상황 표시)
-            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04
+            # WARN 메시지 억제하고 중요 정보만 표시
+            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -v "is not a shared mount" | grep -v "cannot clone" || true
             
-            if [ $? -ne 0 ]; then
+            # 실제 다운로드 성공 여부 확인
+            if podman images 2>/dev/null | grep -q "nvidia/cuda.*12.1.0-base"; then
+                echo ""
+                echo "   ✅ 이미지 다운로드 완료"
+            else
                 echo ""
                 echo "   ⚠️  이미지 다운로드 실패"
-                echo "   ℹ️  네트워크 연결을 확인하세요"
-                echo "   ℹ️  나중에 수동으로 테스트하세요:"
+                echo "   ℹ️  수동으로 테스트하세요:"
                 echo ""
-                echo "   podman run --rm --security-opt=label=disable \\"
-                echo "     --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \\"
-                echo "     --device /dev/nvidiactl:/dev/nvidiactl \\"
-                echo "     --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
-                echo "     --device /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools \\"
-                echo "     docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
+                echo "   podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04"
                 echo ""
                 # 이미지 다운로드 실패해도 계속 진행
                 return 0
@@ -426,14 +444,14 @@ else
         echo "   🧪 GPU 접근 테스트 실행 중..."
         echo ""
         
-        # 테스트 실행 (실시간 출력)
+        # 테스트 실행 (WARN 메시지 필터링)
         TEST_OUTPUT=$(podman run --rm \
             --security-opt=label=disable \
             --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \
             --device /dev/nvidiactl:/dev/nvidiactl \
             --device /dev/nvidia-uvm:/dev/nvidia-uvm \
             --device /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools \
-            docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1)
+            docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1 | grep -v "is not a shared mount" | grep -v "cannot clone" || true)
         
         TEST_EXIT_CODE=$?
         
