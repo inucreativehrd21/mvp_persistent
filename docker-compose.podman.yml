@@ -13,12 +13,14 @@ services:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
       - NVIDIA_VISIBLE_DEVICES=all
     # GPU 접근을 위한 Podman 설정
+    # RunPod 환경에 맞게 GPU 번호를 수정하세요 (nvidia0, nvidia1, nvidia2, nvidia3 등)
     devices:
-      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidia3:/dev/nvidia3  # RunPod에서 감지된 GPU
       - /dev/nvidiactl:/dev/nvidiactl
       - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools  # 추가 디바이스
     security_opt:
-      - label=disable
+      - label=disable  # SELinux 레이블 비활성화 (필수)
     command: >
       --model ${VLLM_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}
       --host 0.0.0.0
