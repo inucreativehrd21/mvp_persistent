@@ -318,22 +318,75 @@ fi
 PYTHON_VERSION=$(python3 --version)
 echo "   ✅ $PYTHON_VERSION 설치됨"
 
-# 11. podman-compose 설치
+# 11. Podman PATH 및 명령 확인
 echo ""
-echo "1️⃣1️⃣  podman-compose 설치 중..."
-pip3 install --quiet podman-compose
-COMPOSE_VERSION=$(podman-compose --version)
-echo "   ✅ $COMPOSE_VERSION 설치 완료"
+echo "1️⃣1️⃣  Podman 설치 확인 중..."
 
-# 12. Podman 시스템 재시작 (설정 적용)
+# Podman 경로 확인
+PODMAN_PATH=$(which podman 2>/dev/null || echo "")
+if [ -z "$PODMAN_PATH" ]; then
+    echo "   ⚠️  podman이 PATH에 없습니다. 검색 중..."
+    
+    # 일반적인 위치 확인
+    for path in /usr/bin/podman /usr/local/bin/podman /bin/podman; do
+        if [ -x "$path" ]; then
+            PODMAN_PATH="$path"
+            break
+        fi
+    done
+fi
+
+if [ -n "$PODMAN_PATH" ]; then
+    echo "   ✅ Podman 위치: $PODMAN_PATH"
+    
+    # PATH에 추가 (필요한 경우)
+    if ! echo "$PATH" | grep -q "$(dirname $PODMAN_PATH)"; then
+        export PATH="$(dirname $PODMAN_PATH):$PATH"
+        echo "export PATH=\"$(dirname $PODMAN_PATH):\$PATH\"" >> ~/.bashrc
+    fi
+    
+    # 버전 확인
+    PODMAN_FULL_VERSION=$($PODMAN_PATH --version)
+    echo "   ✅ $PODMAN_FULL_VERSION"
+else
+    echo "   ❌ Podman을 찾을 수 없습니다."
+    exit 1
+fi
+
+# 12. podman-compose 설치
 echo ""
-echo "1️⃣2️⃣  Podman 시스템 재시작 중..."
+echo "1️⃣2️⃣  podman-compose 설치 중..."
+
+# 환경 변수 다시 확인
+export STORAGE_DRIVER=overlay
+export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
+export CONTAINERS_CONF=/etc/containers/containers.conf
+
+pip3 install --quiet podman-compose
+
+# podman-compose 확인
+if command -v podman-compose &> /dev/null; then
+    COMPOSE_VERSION=$(podman-compose --version 2>/dev/null || echo "installed")
+    echo "   ✅ podman-compose $COMPOSE_VERSION 설치 완료"
+else
+    echo "   ⚠️  podman-compose가 PATH에 추가되지 않았을 수 있습니다"
+    echo "   수동 확인: python3 -m podman_compose --version"
+fi
+
+# 13. Podman 시스템 재시작 (설정 적용)
+echo ""
+echo "1️⃣3️⃣  Podman 시스템 재시작 중..."
 systemctl restart podman 2>/dev/null || true
+
+# Podman 정보 출력 (디버깅)
+echo "   📊 Podman 정보:"
+podman info 2>/dev/null | grep -E "version|store" | head -n 5 || echo "   (정보 가져오기 실패)"
+
 echo "   ✅ Podman 재시작 완료"
 
-# 13. GPU 접근 테스트
+# 14. GPU 접근 테스트
 echo ""
-echo "1️⃣3️⃣  GPU 접근 테스트 중..."
+echo "1️⃣4️⃣  GPU 접근 테스트 중..."
 echo ""
 
 # GPU 디바이스 확인
