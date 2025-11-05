@@ -4,23 +4,33 @@ services:
   vllm-server:
     image: vllm/vllm-openai:latest
     container_name: vllm-hint-server
-    # Podman은 runtime: nvidia 대신 devices로 GPU 접근
+
+    # 포트 매핑
     ports:
       - "${VLLM_PORT:-8000}:8000"
+
+    # 볼륨 마운트
     volumes:
       - ${HUGGINGFACE_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface
+
+    # 환경 변수
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
       - NVIDIA_VISIBLE_DEVICES=all
-    # GPU 접근을 위한 Podman 설정
-    # RunPod 환경에 맞게 GPU 번호를 수정하세요 (nvidia0, nvidia1, nvidia2, nvidia3 등)
+
+    # GPU 디바이스 직접 마운트 (Podman 방식)
+    # install_podman.sh 실행 시 자동으로 감지된 GPU 번호로 업데이트됩니다
     devices:
-      - /dev/nvidia3:/dev/nvidia3  # RunPod에서 감지된 GPU
+      - /dev/nvidia0:/dev/nvidia0
       - /dev/nvidiactl:/dev/nvidiactl
       - /dev/nvidia-uvm:/dev/nvidia-uvm
-      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools  # 추가 디바이스
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+
+    # 보안 옵션 (필수)
     security_opt:
-      - label=disable  # SELinux 레이블 비활성화 (필수)
+      - label=disable
+
+    # vLLM 서버 실행 명령
     command: >
       --model ${VLLM_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}
       --host 0.0.0.0
@@ -30,15 +40,14 @@ services:
       --gpu-memory-utilization ${GPU_MEMORY_UTIL:-0.9}
       --dtype auto
       --trust-remote-code
-    ipc: host
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
 
+    # IPC 네임스페이스 공유 (성능 향상)
+    ipc: host
+
+    # 재시작 정책
+    restart: unless-stopped
+
+# 네트워크 설정
 networks:
   default:
     name: vllm-network
