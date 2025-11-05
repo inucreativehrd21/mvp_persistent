@@ -152,13 +152,36 @@ else
     echo "   ⚠️  CDI 파일 생성 실패 (직접 마운트 방식 사용)"
 fi
 
-# 7. Podman GPU 설정
+# 7. Podman 시스템 설정
 echo ""
-echo "7️⃣  Podman GPU 접근 설정 중..."
+echo "7️⃣  Podman 시스템 설정 중..."
+
+# rootless 모드 문제 해결
+echo "   🔧 rootless 모드 설정 수정 중..."
+
+# /etc/containers/storage.conf 설정
+mkdir -p /etc/containers
+cat > /etc/containers/storage.conf << 'EOF'
+[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "/var/lib/containers/storage"
+
+[storage.options]
+mount_program = "/usr/bin/fuse-overlayfs"
+
+[storage.options.overlay]
+mountopt = "nodev,metacopy=on"
+EOF
+
+echo "   ✅ storage.conf 설정 완료"
+
+# 8. Podman GPU 접근 설정
+echo ""
+echo "8️⃣  Podman GPU 접근 설정 중..."
 
 # containers.conf 파일 위치
 CONTAINERS_CONF="/etc/containers/containers.conf"
-mkdir -p /etc/containers
 
 # 기존 설정 백업 (있는 경우)
 if [ -f "$CONTAINERS_CONF" ]; then
@@ -257,31 +280,51 @@ fi
 
 echo "   ✅ Podman GPU 설정 완료"
 
-# 8. Python 및 pip 확인
+# 9. Rootless 모드 문제 해결
 echo ""
-echo "8️⃣  Python 환경 확인 중..."
+echo "9️⃣  Rootless 모드 네임스페이스 설정 중..."
+
+# mount namespace 공유 설정
+if ! grep -q "/ - rootfs" /proc/self/mountinfo; then
+    echo "   🔧 마운트 네임스페이스 설정 중..."
+fi
+
+# user namespace 설정
+if [ ! -f /etc/subuid ] || ! grep -q "^root:" /etc/subuid; then
+    echo "root:100000:65536" >> /etc/subuid
+    echo "root:100000:65536" >> /etc/subgid
+    echo "   ✅ user namespace 설정 완료"
+fi
+
+# 시스템 설정 적용
+sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+echo "   ✅ 네임스페이스 설정 완료"
+
+# 10. Python 및 pip 확인
+echo ""
+echo "🔟 Python 환경 확인 중..."
 if ! command -v python3 &> /dev/null; then
     apt-get install -y python3 python3-pip python3-venv
 fi
 PYTHON_VERSION=$(python3 --version)
 echo "   ✅ $PYTHON_VERSION 설치됨"
 
-# 9. podman-compose 설치
+# 11. podman-compose 설치
 echo ""
-echo "9️⃣  podman-compose 설치 중..."
+echo "1️⃣1️⃣  podman-compose 설치 중..."
 pip3 install --quiet podman-compose
 COMPOSE_VERSION=$(podman-compose --version)
 echo "   ✅ $COMPOSE_VERSION 설치 완료"
 
-# 10. Podman 시스템 재시작 (설정 적용)
+# 12. Podman 시스템 재시작 (설정 적용)
 echo ""
-echo "🔟 Podman 시스템 재시작 중..."
+echo "1️⃣2️⃣  Podman 시스템 재시작 중..."
 systemctl restart podman 2>/dev/null || true
 echo "   ✅ Podman 재시작 완료"
 
-# 11. GPU 접근 테스트
+# 13. GPU 접근 테스트
 echo ""
-echo "1️⃣1️⃣  GPU 접근 테스트 중..."
+echo "1️⃣3️⃣  GPU 접근 테스트 중..."
 echo ""
 
 # GPU 디바이스 확인
@@ -306,15 +349,15 @@ else
         echo "   📋 CDI 방식 테스트 (nvidia.com/gpu=all)..."
         echo ""
         
-        # 이미지 확인
-        if ! podman images | grep -q "nvidia/cuda.*12.1.0-base"; then
+        # 이미지 확인 (root 모드)
+        if ! podman --root images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
             echo "   ⏳ CUDA 이미지 다운로드 중..."
-            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -E "Pulling|Downloaded|Complete"
+            podman --root pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -E "Pulling|Downloaded|Complete"
             echo ""
         fi
         
         echo "   🧪 CDI GPU 테스트 실행 중..."
-        CDI_OUTPUT=$(podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1)
+        CDI_OUTPUT=$(podman --root run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1)
         CDI_EXIT_CODE=$?
         
         if [ $CDI_EXIT_CODE -eq 0 ] && echo "$CDI_OUTPUT" | grep -q "Tesla\|GeForce\|Quadro\|NVIDIA"; then
@@ -350,16 +393,16 @@ else
         echo "     docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
         echo ""
         
-        # 이미지가 이미 있는지 확인
-        if podman images | grep -q "nvidia/cuda.*12.1.0-base"; then
+        # 이미지가 이미 있는지 확인 (root 모드 강제)
+        if podman --root images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
             echo "   ✓ CUDA 이미지 이미 존재"
         else
             echo "   ⏳ CUDA 이미지 다운로드 중... (최초 실행 시 1-2분 소요)"
             echo "   📦 이미지 크기: ~500MB"
             echo ""
             
-            # 이미지 미리 다운로드 (진행상황 표시)
-            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04
+            # 이미지 미리 다운로드 (진행상황 표시, root 모드 강제)
+            podman --root pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04
             
             if [ $? -ne 0 ]; then
                 echo ""
@@ -383,8 +426,8 @@ else
         echo "   🧪 GPU 접근 테스트 실행 중..."
         echo ""
         
-        # 테스트 실행 (실시간 출력)
-        TEST_OUTPUT=$(podman run --rm \
+        # 테스트 실행 (실시간 출력, root 모드 강제)
+        TEST_OUTPUT=$(podman --root run --rm \
             --security-opt=label=disable \
             --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \
             --device /dev/nvidiactl:/dev/nvidiactl \
@@ -439,7 +482,7 @@ else
             echo "      cat /proc/driver/nvidia/version"
             echo ""
             echo "   4️⃣  수동으로 다시 테스트:"
-            echo "      podman run --rm --security-opt=label=disable \\"
+            echo "      podman --root run --rm --security-opt=label=disable \\"
             echo "        --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \\"
             echo "        --device /dev/nvidiactl:/dev/nvidiactl \\"
             echo "        --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
@@ -500,7 +543,7 @@ echo ""
 echo "🔧 유용한 명령어:"
 echo "  환경 체크:     ./check_environment.sh"
 echo "  문제 해결:     ./troubleshoot.sh"
-echo "  수동 GPU 테스트: podman run --rm --security-opt=label=disable \\"
+echo "  수동 GPU 테스트: podman --root run --rm --security-opt=label=disable \\"
 echo "                   --device /dev/nvidia${GPU_NUM:-3}:/dev/nvidia${GPU_NUM:-3} \\"
 echo "                   --device /dev/nvidiactl:/dev/nvidiactl \\"
 echo "                   --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
