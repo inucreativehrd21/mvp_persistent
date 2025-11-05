@@ -91,21 +91,63 @@ echo "   ✅ NVIDIA CDI 설정 완료"
 echo ""
 echo "7️⃣  Podman GPU 접근 설정 중..."
 
-# containers.conf 파일 위치 확인 및 생성
+# containers.conf 파일 위치
 CONTAINERS_CONF="/etc/containers/containers.conf"
-if [ ! -f "$CONTAINERS_CONF" ]; then
-    mkdir -p /etc/containers
-    touch "$CONTAINERS_CONF"
+mkdir -p /etc/containers
+
+# 기존 설정 백업 (있는 경우)
+if [ -f "$CONTAINERS_CONF" ]; then
+    cp "$CONTAINERS_CONF" "${CONTAINERS_CONF}.backup.$(date +%Y%m%d_%H%M%S)"
 fi
 
-# nvidia-ctk로 crun 런타임 설정
-nvidia-ctk runtime configure --runtime=crun --config="$CONTAINERS_CONF"
+# containers.conf 수동 생성
+cat > "$CONTAINERS_CONF" << 'EOF'
+[containers]
+# 기본 컨테이너 설정
+default_capabilities = [
+  "CHOWN",
+  "DAC_OVERRIDE",
+  "FOWNER",
+  "FSETID",
+  "KILL",
+  "NET_BIND_SERVICE",
+  "SETFCAP",
+  "SETGID",
+  "SETPCAP",
+  "SETUID",
+  "SYS_CHROOT"
+]
 
-# crun이 기본 런타임인지 확인하고 설정
-if ! grep -q "^runtime = \"crun\"" "$CONTAINERS_CONF" 2>/dev/null; then
-    echo '[engine]' >> "$CONTAINERS_CONF"
-    echo 'runtime = "crun"' >> "$CONTAINERS_CONF"
-fi
+[engine]
+# crun을 기본 OCI 런타임으로 설정
+runtime = "crun"
+
+# CDI 활성화
+cdi_spec_dirs = ["/etc/cdi", "/var/run/cdi"]
+
+[engine.runtimes]
+# crun 런타임 정의
+crun = [
+    "/usr/bin/crun",
+    "/usr/sbin/crun",
+    "/usr/local/bin/crun",
+    "/usr/local/sbin/crun",
+    "/sbin/crun",
+    "/bin/crun",
+    "/run/current-system/sw/bin/crun",
+]
+
+# runc 런타임 정의 (폴백용)
+runc = [
+    "/usr/bin/runc",
+    "/usr/sbin/runc",
+    "/usr/local/bin/runc",
+    "/usr/local/sbin/runc",
+    "/sbin/runc",
+    "/bin/runc",
+    "/usr/lib/cri-o-runc/sbin/runc",
+]
+EOF
 
 echo "   ✅ Podman GPU 설정 완료"
 
