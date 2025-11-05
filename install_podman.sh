@@ -349,15 +349,15 @@ else
         echo "   📋 CDI 방식 테스트 (nvidia.com/gpu=all)..."
         echo ""
         
-        # 이미지 확인 (root 모드)
-        if ! podman --root images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
+        # 이미지 확인
+        if ! podman images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
             echo "   ⏳ CUDA 이미지 다운로드 중..."
-            podman --root pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -E "Pulling|Downloaded|Complete"
+            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -E "Pulling|Downloaded|Complete"
             echo ""
         fi
         
         echo "   🧪 CDI GPU 테스트 실행 중..."
-        CDI_OUTPUT=$(podman --root run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1)
+        CDI_OUTPUT=$(podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1)
         CDI_EXIT_CODE=$?
         
         if [ $CDI_EXIT_CODE -eq 0 ] && echo "$CDI_OUTPUT" | grep -q "Tesla\|GeForce\|Quadro\|NVIDIA"; then
@@ -393,16 +393,16 @@ else
         echo "     docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
         echo ""
         
-        # 이미지가 이미 있는지 확인 (root 모드 강제)
-        if podman --root images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
+        # 이미지가 이미 있는지 확인
+        if podman images | grep -q "nvidia/cuda.*12.1.0-base" 2>/dev/null; then
             echo "   ✓ CUDA 이미지 이미 존재"
         else
             echo "   ⏳ CUDA 이미지 다운로드 중... (최초 실행 시 1-2분 소요)"
             echo "   📦 이미지 크기: ~500MB"
             echo ""
             
-            # 이미지 미리 다운로드 (진행상황 표시, root 모드 강제)
-            podman --root pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04
+            # 이미지 미리 다운로드 (진행상황 표시)
+            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04
             
             if [ $? -ne 0 ]; then
                 echo ""
@@ -426,8 +426,8 @@ else
         echo "   🧪 GPU 접근 테스트 실행 중..."
         echo ""
         
-        # 테스트 실행 (실시간 출력, root 모드 강제)
-        TEST_OUTPUT=$(podman --root run --rm \
+        # 테스트 실행 (실시간 출력)
+        TEST_OUTPUT=$(podman run --rm \
             --security-opt=label=disable \
             --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \
             --device /dev/nvidiactl:/dev/nvidiactl \
@@ -482,7 +482,7 @@ else
             echo "      cat /proc/driver/nvidia/version"
             echo ""
             echo "   4️⃣  수동으로 다시 테스트:"
-            echo "      podman --root run --rm --security-opt=label=disable \\"
+            echo "      podman run --rm --security-opt=label=disable \\"
             echo "        --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \\"
             echo "        --device /dev/nvidiactl:/dev/nvidiactl \\"
             echo "        --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
@@ -543,7 +543,7 @@ echo ""
 echo "🔧 유용한 명령어:"
 echo "  환경 체크:     ./check_environment.sh"
 echo "  문제 해결:     ./troubleshoot.sh"
-echo "  수동 GPU 테스트: podman --root run --rm --security-opt=label=disable \\"
+echo "  수동 GPU 테스트: podman run --rm --security-opt=label=disable \\"
 echo "                   --device /dev/nvidia${GPU_NUM:-3}:/dev/nvidia${GPU_NUM:-3} \\"
 echo "                   --device /dev/nvidiactl:/dev/nvidiactl \\"
 echo "                   --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
