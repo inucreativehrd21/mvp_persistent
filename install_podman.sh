@@ -140,8 +140,17 @@ echo "   ✅ NVIDIA Container Toolkit 설치 완료"
 echo ""
 echo "6️⃣  NVIDIA CDI (Container Device Interface) 설정 중..."
 mkdir -p /etc/cdi
-nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
-echo "   ✅ NVIDIA CDI 설정 완료"
+
+echo "   🔧 CDI 파일 생성 중... (WARN 메시지는 무시해도 됩니다)"
+nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml 2>&1 | grep -E "INFO.*Selecting /dev/nvidia[0-9]|Using driver version|Generated CDI" || true
+
+# CDI 파일이 생성되었는지 확인
+if [ -f /etc/cdi/nvidia.yaml ]; then
+    GPU_COUNT=$(grep -c "name: nvidia.com/gpu" /etc/cdi/nvidia.yaml || echo "0")
+    echo "   ✅ NVIDIA CDI 설정 완료 (GPU ${GPU_COUNT}개 감지)"
+else
+    echo "   ⚠️  CDI 파일 생성 실패 (직접 마운트 방식 사용)"
+fi
 
 # 7. Podman GPU 설정
 echo ""
@@ -295,13 +304,35 @@ else
     # Podman 4.x+인 경우 CDI 방식 먼저 테스트
     if [ "$USE_DIRECT_DEVICE_MOUNT" = false ]; then
         echo "   📋 CDI 방식 테스트 (nvidia.com/gpu=all)..."
-        if podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1 | grep -q "Tesla\|GeForce\|Quadro\|NVIDIA"; then
+        echo ""
+        
+        # 이미지 확인
+        if ! podman images | grep -q "nvidia/cuda.*12.1.0-base"; then
+            echo "   ⏳ CUDA 이미지 다운로드 중..."
+            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 2>&1 | grep -E "Pulling|Downloaded|Complete"
+            echo ""
+        fi
+        
+        echo "   🧪 CDI GPU 테스트 실행 중..."
+        CDI_OUTPUT=$(podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>&1)
+        CDI_EXIT_CODE=$?
+        
+        if [ $CDI_EXIT_CODE -eq 0 ] && echo "$CDI_OUTPUT" | grep -q "Tesla\|GeForce\|Quadro\|NVIDIA"; then
             echo ""
             echo "   ✅ GPU 접근 테스트 성공! (CDI 방식)"
-            echo "   ℹ️  nvidia.com/gpu=all 방식을 사용할 수 있습니다."
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "$CDI_OUTPUT" | head -n 25
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "   ✨ CDI 사용 가능!"
+            echo "   ℹ️  docker-compose에서 --device nvidia.com/gpu=all 사용 가능"
             echo ""
         else
-            echo "   ⚠️  CDI 방식 실패, 직접 마운트 방식으로 시도..."
+            echo ""
+            echo "   ⚠️  CDI 방식 실패, 직접 마운트 방식으로 전환..."
+            echo "   (이것은 정상입니다. Podman 3.x에서는 CDI가 지원되지 않습니다)"
+            echo ""
             USE_DIRECT_DEVICE_MOUNT=true
         fi
     fi
@@ -318,10 +349,42 @@ else
         echo "     --device /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools \\"
         echo "     docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
         echo ""
-        echo "   ⏳ CUDA 이미지 다운로드 중... (최초 실행 시 시간이 걸립니다)"
+        
+        # 이미지가 이미 있는지 확인
+        if podman images | grep -q "nvidia/cuda.*12.1.0-base"; then
+            echo "   ✓ CUDA 이미지 이미 존재"
+        else
+            echo "   ⏳ CUDA 이미지 다운로드 중... (최초 실행 시 1-2분 소요)"
+            echo "   📦 이미지 크기: ~500MB"
+            echo ""
+            
+            # 이미지 미리 다운로드 (진행상황 표시)
+            podman pull docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04
+            
+            if [ $? -ne 0 ]; then
+                echo ""
+                echo "   ⚠️  이미지 다운로드 실패"
+                echo "   ℹ️  네트워크 연결을 확인하세요"
+                echo "   ℹ️  나중에 수동으로 테스트하세요:"
+                echo ""
+                echo "   podman run --rm --security-opt=label=disable \\"
+                echo "     --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \\"
+                echo "     --device /dev/nvidiactl:/dev/nvidiactl \\"
+                echo "     --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
+                echo "     --device /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools \\"
+                echo "     docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
+                echo ""
+                # 이미지 다운로드 실패해도 계속 진행
+                return 0
+            fi
+        fi
+        
+        echo ""
+        echo "   🧪 GPU 접근 테스트 실행 중..."
         echo ""
         
-        TEST_OUTPUT=$(timeout 180 podman run --rm \
+        # 테스트 실행 (실시간 출력)
+        TEST_OUTPUT=$(podman run --rm \
             --security-opt=label=disable \
             --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \
             --device /dev/nvidiactl:/dev/nvidiactl \
@@ -331,38 +394,33 @@ else
         
         TEST_EXIT_CODE=$?
         
-        if [ $TEST_EXIT_CODE -eq 124 ]; then
-            echo "   ⏱️  테스트 타임아웃 (180초)"
-            echo "   ℹ️  이미지 다운로드가 완료되지 않았을 수 있습니다."
-            echo "   ℹ️  수동으로 테스트하세요:"
-            echo "   podman run --rm --security-opt=label=disable \\"
-            echo "     --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \\"
-            echo "     --device /dev/nvidiactl:/dev/nvidiactl \\"
-            echo "     --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
-            echo "     --device /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools \\"
-            echo "     docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
-            echo ""
-        elif echo "$TEST_OUTPUT" | grep -q "Tesla\|GeForce\|Quadro\|NVIDIA"; then
+        echo ""
+        
+        # 결과 분석
+        if [ $TEST_EXIT_CODE -eq 0 ] && echo "$TEST_OUTPUT" | grep -q "NVIDIA\|Tesla\|GeForce\|Quadro"; then
             echo "   ✅ GPU 접근 테스트 성공! (디바이스 직접 마운트 방식)"
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "$TEST_OUTPUT" | head -n 20
+            echo "$TEST_OUTPUT" | head -n 25
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             echo "   ✨ 설정 정보:"
-            echo "   ├─ GPU 디바이스: /dev/nvidia${GPU_NUM}"
-            echo "   ├─ docker-compose.podman.yml 수정 필요:"
+            echo "   ├─ 🎮 GPU 디바이스: /dev/nvidia${GPU_NUM}"
+            echo "   ├─ 📝 docker-compose.podman.yml 수정 필요:"
+            echo "   │"
             echo "   │  devices:"
             echo "   │    - /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM}"
             echo "   │    - /dev/nvidiactl:/dev/nvidiactl"
             echo "   │    - /dev/nvidia-uvm:/dev/nvidia-uvm"
             echo "   │    - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools"
+            echo "   │"
             echo "   │  security_opt:"
             echo "   │    - label=disable"
-            echo "   └─ 이 설정은 필수입니다!"
+            echo "   │"
+            echo "   └─ ⚠️  이 설정은 필수입니다!"
             echo ""
-        else
-            echo "   ❌ GPU 접근 테스트 실패"
+        elif [ $TEST_EXIT_CODE -ne 0 ]; then
+            echo "   ❌ GPU 접근 테스트 실패 (종료 코드: $TEST_EXIT_CODE)"
             echo ""
             echo "   디버그 출력:"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -370,17 +428,34 @@ else
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             echo "   🔍 문제 해결 단계:"
-            echo "   1. nvidia-smi 실행 확인:"
+            echo ""
+            echo "   1️⃣  호스트에서 nvidia-smi 실행 확인:"
             echo "      nvidia-smi"
             echo ""
-            echo "   2. GPU 디바이스 권한 확인:"
+            echo "   2️⃣  GPU 디바이스 권한 확인:"
             echo "      ls -l /dev/nvidia*"
             echo ""
-            echo "   3. NVIDIA 드라이버 확인:"
+            echo "   3️⃣  NVIDIA 드라이버 확인:"
             echo "      cat /proc/driver/nvidia/version"
             echo ""
-            echo "   4. 문제 해결 가이드:"
+            echo "   4️⃣  수동으로 다시 테스트:"
+            echo "      podman run --rm --security-opt=label=disable \\"
+            echo "        --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \\"
+            echo "        --device /dev/nvidiactl:/dev/nvidiactl \\"
+            echo "        --device /dev/nvidia-uvm:/dev/nvidia-uvm \\"
+            echo "        --device /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools \\"
+            echo "        docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi"
+            echo ""
+            echo "   5️⃣  문제 해결 가이드:"
             echo "      cat RUNPOD_GPU_TROUBLESHOOTING.md"
+            echo ""
+        else
+            echo "   ⚠️  예상치 못한 출력"
+            echo ""
+            echo "   출력 내용:"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "$TEST_OUTPUT"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
         fi
     fi
