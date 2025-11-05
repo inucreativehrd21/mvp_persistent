@@ -25,6 +25,11 @@ fi
 # .env 파일 로드
 export $(grep -v '^#' .env | xargs)
 
+# Podman 환경 변수 설정 (중요!)
+export STORAGE_DRIVER=overlay
+export CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf
+export CONTAINERS_CONF=/etc/containers/containers.conf
+
 # GPU 확인
 echo "1️⃣  GPU 상태 확인 중..."
 if ! command -v nvidia-smi &> /dev/null; then
