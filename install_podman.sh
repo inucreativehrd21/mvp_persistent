@@ -90,7 +90,23 @@ echo "   ✅ NVIDIA CDI 설정 완료"
 # 7. Podman GPU 설정
 echo ""
 echo "7️⃣  Podman GPU 접근 설정 중..."
-nvidia-ctk runtime configure --runtime=crun --config=/usr/share/containers/containers.conf
+
+# containers.conf 파일 위치 확인 및 생성
+CONTAINERS_CONF="/etc/containers/containers.conf"
+if [ ! -f "$CONTAINERS_CONF" ]; then
+    mkdir -p /etc/containers
+    touch "$CONTAINERS_CONF"
+fi
+
+# nvidia-ctk로 crun 런타임 설정
+nvidia-ctk runtime configure --runtime=crun --config="$CONTAINERS_CONF"
+
+# crun이 기본 런타임인지 확인하고 설정
+if ! grep -q "^runtime = \"crun\"" "$CONTAINERS_CONF" 2>/dev/null; then
+    echo '[engine]' >> "$CONTAINERS_CONF"
+    echo 'runtime = "crun"' >> "$CONTAINERS_CONF"
+fi
+
 echo "   ✅ Podman GPU 설정 완료"
 
 # 8. Python 및 pip 확인
@@ -109,31 +125,53 @@ pip3 install --quiet podman-compose
 COMPOSE_VERSION=$(podman-compose --version)
 echo "   ✅ $COMPOSE_VERSION 설치 완료"
 
-# 10. GPU 접근 테스트
+# 10. Podman 시스템 재시작 (설정 적용)
 echo ""
-echo "🔟 GPU 접근 테스트 중..."
+echo "🔟 Podman 시스템 재시작 중..."
+systemctl restart podman 2>/dev/null || true
+echo "   ✅ Podman 재시작 완료"
+
+# 11. GPU 접근 테스트
+echo ""
+echo "1️⃣1️⃣  GPU 접근 테스트 중..."
 echo ""
 
+# 먼저 nvidia.com/gpu CDI 방식 테스트
+echo "   📋 CDI 방식 테스트 (nvidia.com/gpu=all)..."
 if podman run --rm --device nvidia.com/gpu=all docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>/dev/null; then
     echo ""
-    echo "   ✅ GPU 접근 테스트 성공!"
+    echo "   ✅ GPU 접근 테스트 성공! (CDI 방식)"
+    echo "   ℹ️  nvidia.com/gpu=all 방식을 사용할 수 있습니다."
 else
+    echo "   ⚠️  CDI 방식 실패, 디바이스 직접 마운트 방식으로 테스트..."
     echo ""
-    echo "   ⚠️  nvidia.com/gpu 방식 실패, 디바이스 직접 마운트 방식으로 테스트..."
-    if podman run --rm \
-        --device /dev/nvidia0:/dev/nvidia0 \
-        --device /dev/nvidiactl:/dev/nvidiactl \
-        --device /dev/nvidia-uvm:/dev/nvidia-uvm \
-        docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>/dev/null; then
-        echo ""
-        echo "   ✅ GPU 접근 테스트 성공! (디바이스 직접 마운트 방식)"
-        echo "   ℹ️  docker-compose.podman.yml이 이미 이 방식으로 설정되어 있습니다."
+    
+    # GPU 디바이스 자동 감지
+    GPU_DEVICES=$(ls /dev/nvidia* 2>/dev/null | grep -E "nvidia[0-9]+$" | head -n 1)
+    
+    if [ -z "$GPU_DEVICES" ]; then
+        echo "   ⚠️  GPU 디바이스를 찾을 수 없습니다."
+        echo "   수동으로 확인하세요: ls -l /dev/nvidia*"
     else
-        echo ""
-        echo "   ❌ GPU 접근 테스트 실패"
-        echo "   수동으로 확인이 필요합니다:"
-        echo "   ls -l /dev/nvidia*"
-        echo ""
+        GPU_NUM=$(echo $GPU_DEVICES | grep -oE '[0-9]+$')
+        echo "   📋 감지된 GPU: /dev/nvidia${GPU_NUM}"
+        echo "   📋 직접 마운트 방식 테스트..."
+        
+        if podman run --rm \
+            --device /dev/nvidia${GPU_NUM}:/dev/nvidia${GPU_NUM} \
+            --device /dev/nvidiactl:/dev/nvidiactl \
+            --device /dev/nvidia-uvm:/dev/nvidia-uvm \
+            docker.io/nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi 2>/dev/null; then
+            echo ""
+            echo "   ✅ GPU 접근 테스트 성공! (디바이스 직접 마운트 방식)"
+            echo "   ℹ️  docker-compose.podman.yml에서 /dev/nvidia${GPU_NUM} 사용"
+        else
+            echo ""
+            echo "   ❌ GPU 접근 테스트 실패"
+            echo "   수동으로 확인이 필요합니다:"
+            echo "   ls -l /dev/nvidia*"
+            echo ""
+        fi
     fi
 fi
 
