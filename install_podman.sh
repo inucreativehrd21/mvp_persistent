@@ -36,40 +36,79 @@ apt-get install -y -qq \
 
 # 3. Podman 설치
 echo ""
-echo "3️⃣  Podman 4.x 설치 중..."
+echo "3️⃣  Podman 설치 중..."
 
 # Ubuntu 버전 확인
 . /etc/os-release
 
-# 기존 Podman 제거 (있는 경우)
-apt-get remove -y podman 2>/dev/null || true
+# 기존 Podman 및 관련 패키지 완전 제거
+echo "   🗑️  기존 Podman 제거 중..."
+apt-get remove -y podman podman-plugins containernetworking-plugins 2>/dev/null || true
+apt-get autoremove -y 2>/dev/null || true
 
-# Podman 4.x를 위한 저장소 추가
-echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/ /" | \
-    tee /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
-
-curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/Release.key" | \
-    gpg --dearmor | \
-    tee /etc/apt/trusted.gpg.d/devel_kubic_libcontainers_stable.gpg > /dev/null
-
-# 업데이트 및 Podman 설치
-apt-get update -qq
-apt-get install -y podman
+# Podman 4.x 시도 (Ubuntu 22.04+)
+if [ "${VERSION_ID}" = "22.04" ] || [ "${VERSION_ID}" = "24.04" ]; then
+    echo "   📦 Podman 4.x 저장소 시도 중..."
+    
+    # Kubic 최신 저장소 추가 시도
+    echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/ /" | \
+        tee /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list > /dev/null
+    
+    curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/unstable/xUbuntu_${VERSION_ID}/Release.key" | \
+        gpg --dearmor | \
+        tee /etc/apt/trusted.gpg.d/devel_kubic_libcontainers_unstable.gpg > /dev/null 2>&1
+    
+    apt-get update -qq 2>/dev/null
+    
+    # Podman 4.x 설치 시도
+    if apt-cache show podman 2>/dev/null | grep -q "Version: 4\."; then
+        echo "   ✅ Podman 4.x 발견!"
+        apt-get install -y podman
+    else
+        echo "   ⚠️  Podman 4.x를 찾을 수 없음, 안정 버전으로 폴백..."
+        rm -f /etc/apt/sources.list.d/devel:kubic:libcontainers:unstable.list
+        
+        # 안정 저장소로 폴백
+        echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/ /" | \
+            tee /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
+        
+        curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/Release.key" | \
+            gpg --dearmor | \
+            tee /etc/apt/trusted.gpg.d/devel_kubic_libcontainers_stable.gpg > /dev/null
+        
+        apt-get update -qq
+        apt-get install -y podman
+    fi
+else
+    # 다른 Ubuntu 버전은 안정 저장소 사용
+    echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/ /" | \
+        tee /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
+    
+    curl -fsSL "https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_${VERSION_ID}/Release.key" | \
+        gpg --dearmor | \
+        tee /etc/apt/trusted.gpg.d/devel_kubic_libcontainers_stable.gpg > /dev/null
+    
+    apt-get update -qq
+    apt-get install -y podman
+fi
 
 # Podman 버전 확인
 PODMAN_VERSION=$(podman --version)
-PODMAN_MAJOR=$(echo "$PODMAN_VERSION" | grep -oP 'version \K[0-9]+')
+PODMAN_MAJOR=$(echo "$PODMAN_VERSION" | grep -oP 'version \K[0-9]+' || echo "3")
 
 echo "   ✅ $PODMAN_VERSION 설치 완료"
 
-# 버전 체크
+# 버전 체크 및 전략 결정
 if [ "$PODMAN_MAJOR" -lt 4 ]; then
-    echo "   ⚠️  경고: Podman $PODMAN_MAJOR.x가 설치되었습니다."
-    echo "   ⚠️  CDI GPU 지원을 위해서는 Podman 4.0+ 권장"
-    echo "   ⚠️  직접 디바이스 마운트 방식으로 진행합니다..."
+    echo ""
+    echo "   ⚠️  Podman ${PODMAN_MAJOR}.x 설치됨 (CDI 미지원)"
+    echo "   ℹ️  RunPod 환경에서는 Podman 3.x가 표준입니다"
+    echo "   ℹ️  직접 디바이스 마운트 방식 사용 (안정적)"
     USE_DIRECT_DEVICE_MOUNT=true
 else
-    echo "   ℹ️  Podman 4.x 이상: CDI 지원 활성화"
+    echo ""
+    echo "   🎉 Podman ${PODMAN_MAJOR}.x 설치됨 (CDI 지원)"
+    echo "   ℹ️  CDI 및 직접 마운트 방식 모두 테스트합니다"
     USE_DIRECT_DEVICE_MOUNT=false
 fi
 
